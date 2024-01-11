@@ -9,20 +9,20 @@ use core::result::Result;
 
 use crate::error::Error;
 
+use alloc::vec;
 use ckb_auth_rs::{
     ckb_auth, generate_sighash_all, AuthAlgorithmIdType, CkbAuthError, CkbAuthType, CkbEntryType,
     EntryCategoryType,
 };
 #[cfg(feature = "enable-dynamic-library")]
-use ckb_auth_rs::{ckb_auth_prepare, RECOMMEND_PREFILLED_LEN};
+use ckb_auth_rs::{
+    ckb_auth_get_required_prefilled_data_size, ckb_auth_prepare, RECOMMEND_PREFILLED_LEN,
+};
 use ckb_std::{
     ckb_constants::Source,
     ckb_types::{bytes::Bytes, core::ScriptHashType, prelude::*},
     high_level::{load_script, load_witness_args},
 };
-
-#[cfg(feature = "enable-dynamic-library")]
-static mut SECP_DATA: [u8; RECOMMEND_PREFILLED_LEN] = [0u8; RECOMMEND_PREFILLED_LEN];
 
 pub fn main() -> Result<(), Error> {
     let mut pubkey_hash = [0u8; 20];
@@ -65,7 +65,7 @@ pub fn main() -> Result<(), Error> {
 
     let id = CkbAuthType {
         algorithm_id: AuthAlgorithmIdType::try_from(auth_id).map_err(|f| CkbAuthError::from(f))?,
-        pubkey_hash: pubkey_hash,
+        pubkey_hash,
     };
 
     match id.algorithm_id {
@@ -81,21 +81,17 @@ pub fn main() -> Result<(), Error> {
 
     let entry = CkbEntryType {
         code_hash,
-        hash_type,
+        hash_type: hash_type.into(),
         entry_category: EntryCategoryType::try_from(entry_type)
             .map_err(|f| CkbAuthError::from(f))
             .unwrap(),
     };
     #[cfg(feature = "enable-dynamic-library")]
-    let secp_data = {
-        let mut len: usize = RECOMMEND_PREFILLED_LEN;
-        ckb_auth_prepare(
-            &entry,
-            unsafe { &mut SECP_DATA },
-            id.algorithm_id.clone(),
-            &mut len,
-        )?;
-        unsafe { &mut SECP_DATA }
+    let secp_data = &mut {
+        let mut len = ckb_auth_get_required_prefilled_data_size(&entry, id.algorithm_id.clone())?;
+        let mut data = vec![0; len];
+        ckb_auth_prepare(&entry, &mut data, id.algorithm_id.clone(), &mut len)?;
+        data
     };
     #[cfg(not(feature = "enable-dynamic-library"))]
     let secp_data = &mut [0u8; 1];
@@ -103,6 +99,7 @@ pub fn main() -> Result<(), Error> {
     ckb_auth(&entry, secp_data, &id, &signature, &message)?;
     // ckb_auth can be invoked multiple times for different signatures. Here we
     // use the same one to demo the usage.
+
     ckb_auth(&entry, secp_data, &id, &signature, &message)?;
 
     Ok(())
